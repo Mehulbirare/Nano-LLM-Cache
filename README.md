@@ -12,7 +12,42 @@ This repository is organized as a monorepo with the following packages:
 
 - **GitHub**: [https://github.com/Mehulbirare/Nano-LLM-Cache](https://github.com/Mehulbirare/Nano-LLM-Cache)
 
-## 🚀 Getting Started
+## 🚀 Quick Start
+
+Install the core package:
+
+```bash
+npm install @nano-llm-cache/core
+```
+
+### Basic Usage
+
+```typescript
+import { NanoCache } from '@nano-llm-cache/core';
+
+// Create cache instance
+const cache = new NanoCache({
+  similarityThreshold: 0.95, // 95% similarity required (0-1)
+});
+
+// Save a response (e.g. from your LLM)
+await cache.save(
+  'What is the weather in London?',
+  'The weather in London is cloudy with a chance of rain, 15°C.'
+);
+
+// Later, query with a similar prompt
+// This will return the cached response because the meaning is the same!
+const result = await cache.query('Tell me the London weather');
+
+if (result.hit) {
+  console.log('Cache HIT!', result.response);
+} else {
+  console.log('Cache MISS - call your LLM API');
+}
+```
+
+## 🛠️ Development Getting Started
 
 To get started with development:
 
