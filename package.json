@@ -1,5 +1,8 @@
 {
-    "name": "nano-llm-cache",
+    "name": "@nano-llm-cache/core",
+    "publishConfig": {
+        "access": "public"
+    },
     "version": "1.0.0",
     "description": "A semantic cache for LLM API calls using local embeddings and vector similarity",
     "main": "./dist/index.js",

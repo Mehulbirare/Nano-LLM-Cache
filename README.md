@@ -35,7 +35,7 @@ Nano-LLM-Cache uses **vector embeddings** to understand meaning:
 ## 📦 Installation
 
 ```bash
-npm install nano-llm-cache
+npm install @nano-llm-cache/core
 ```
 
 ## 🚀 Quick Start
@@ -43,7 +43,7 @@ npm install nano-llm-cache
 ### Basic Usage
 
 ```typescript
-import { NanoCache } from 'nano-llm-cache';
+import { NanoCache } from '@nano-llm-cache/core';
 
 // Create cache instance
 const cache = new NanoCache({
@@ -73,7 +73,7 @@ if (result.hit) {
 
 ```typescript
 import OpenAI from 'openai';
-import { NanoCache } from 'nano-llm-cache';
+import { NanoCache } from '@nano-llm-cache/core';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const cache = new NanoCache({ similarityThreshold: 0.95 });
@@ -366,7 +366,7 @@ maxAge: 24 * 60 * 60 * 1000  // 24 hours
 ### Custom Storage
 
 ```typescript
-import { NanoCache } from 'nano-llm-cache';
+import { NanoCache } from '@nano-llm-cache/core';
 
 const cache = new NanoCache({
   storagePrefix: 'my-app-cache'  // Separate cache per app
