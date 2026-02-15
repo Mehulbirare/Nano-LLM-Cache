@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nano-LLM-Cache Browser Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5rem;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .subtitle {
+            color: rgba(255, 255, 255, 0.9);
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 1.1rem;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .result.show {
+            display: block;
+        }
+
+        .result.hit {
+            background: #d4edda;
+            border: 2px solid #28a745;
+            color: #155724;
+        }
+
+        .result.miss {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            color: #856404;
+        }
+
+        .result-header {
+            font-weight: 700;
+            font-size: 18px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge.hit {
+            background: #28a745;
+            color: white;
+        }
+
+        .badge.miss {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+
+        .log {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 15px;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-left: 3px solid #667eea;
+            padding-left: 10px;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🚀 Nano-LLM-Cache</h1>
+        <p class="subtitle">Semantic Cache Demo - Try asking similar questions!</p>
+
+        <div class="card">
+            <h2>💾 Save to Cache</h2>
+            <div class="input-group">
+                <label for="savePrompt">Prompt</label>
+                <input type="text" id="savePrompt" placeholder="e.g., What is the weather in London?">
+            </div>
+            <div class="input-group">
+                <label for="saveResponse">Response</label>
+                <textarea id="saveResponse"
+                    placeholder="e.g., The weather in London is cloudy with a chance of rain, 15°C."></textarea>
+            </div>
+            <button class="btn-primary" onclick="saveToCache()">Save to Cache</button>
+        </div>
+
+        <div class="card">
+            <h2>🔍 Query Cache</h2>
+            <div class="input-group">
+                <label for="queryPrompt">Prompt</label>
+                <input type="text" id="queryPrompt" placeholder="e.g., Tell me the London weather">
+            </div>
+            <button class="btn-primary" onclick="queryCache()">Query Cache</button>
+
+            <div id="queryResult" class="result">
+                <div class="result-header">
+                    <span id="resultBadge" class="badge">HIT</span>
+                    <span id="resultTitle">Cache Hit!</span>
+                </div>
+                <div id="resultContent"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📊 Cache Statistics</h2>
+            <div class="stats" id="stats">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalEntries">0</div>
+                    <div class="stat-label">Total Entries</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="cacheHits">0</div>
+                    <div class="stat-label">Cache Hits</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="cacheMisses">0</div>
+                    <div class="stat-label">Cache Misses</div>
+                </div>
+            </div>
+            <div class="button-group">
+                <button class="btn-secondary" onclick="updateStats()">Refresh Stats</button>
+                <button class="btn-secondary" onclick="clearCache()">Clear Cache</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📝 Activity Log</h2>
+            <div id="log" class="log"></div>
+        </div>
+
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>Loading embedding model... (first time only, ~20MB)</p>
+        </div>
+    </div>
+
+    <script type="module">
+        import { NanoCache } from './dist/index.mjs';
+
+        // Initialize cache
+        let cache;
+        let stats = { hits: 0, misses: 0 };
+
+        async function initCache() {
+            addLog('Initializing Nano-LLM-Cache...');
+            document.getElementById('loading').classList.add('show');
+
+            cache = new NanoCache({
+                similarityThreshold: 0.95,
+                debug: true
+            });
+
+            // Preload model
+            await cache.preloadModel();
+
+            document.getElementById('loading').classList.remove('show');
+            addLog('✅ Cache initialized and model loaded!');
+            updateStats();
+        }
+
+        window.saveToCache = async function () {
+            const prompt = document.getElementById('savePrompt').value;
+            const response = document.getElementById('saveResponse').value;
+
+            if (!prompt || !response) {
+                alert('Please enter both prompt and response');
+                return;
+            }
+
+            addLog(`Saving: "${prompt}"`);
+            await cache.save(prompt, response);
+            addLog('✅ Saved to cache');
+
+            document.getElementById('savePrompt').value = '';
+            document.getElementById('saveResponse').value = '';
+            updateStats();
+        };
+
+        window.queryCache = async function () {
+            const prompt = document.getElementById('queryPrompt').value;
+
+            if (!prompt) {
+                alert('Please enter a prompt');
+                return;
+            }
+
+            addLog(`Querying: "${prompt}"`);
+            const result = await cache.query(prompt);
+
+            const resultDiv = document.getElementById('queryResult');
+            const resultBadge = document.getElementById('resultBadge');
+            const resultTitle = document.getElementById('resultTitle');
+            const resultContent = document.getElementById('resultContent');
+
+            resultDiv.classList.add('show');
+
+            if (result.hit) {
+                stats.hits++;
+                resultDiv.className = 'result show hit';
+                resultBadge.className = 'badge hit';
+                resultBadge.textContent = 'HIT';
+                resultTitle.textContent = `Cache Hit! (Similarity: ${(result.similarity * 100).toFixed(2)}%)`;
+                resultContent.innerHTML = `<strong>Response:</strong><br>${result.response}`;
+                addLog(`✅ Cache HIT! Similarity: ${result.similarity.toFixed(4)}`);
+            } else {
+                stats.misses++;
+                resultDiv.className = 'result show miss';
+                resultBadge.className = 'badge miss';
+                resultBadge.textContent = 'MISS';
+                resultTitle.textContent = 'Cache Miss';
+                resultContent.innerHTML = result.similarity
+                    ? `Best similarity: ${(result.similarity * 100).toFixed(2)}% (below threshold)`
+                    : 'No similar entries found';
+                addLog(`❌ Cache MISS`);
+            }
+
+            updateStats();
+        };
+
+        window.updateStats = async function () {
+            const cacheStats = await cache.getStats();
+            document.getElementById('totalEntries').textContent = cacheStats.totalEntries;
+            document.getElementById('cacheHits').textContent = stats.hits;
+            document.getElementById('cacheMisses').textContent = stats.misses;
+        };
+
+        window.clearCache = async function () {
+            if (confirm('Are you sure you want to clear all cache entries?')) {
+                await cache.clear();
+                stats = { hits: 0, misses: 0 };
+                addLog('🗑️ Cache cleared');
+                updateStats();
+            }
+        };
+
+        function addLog(message) {
+            const log = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.textContent = `[${timestamp}] ${message}`;
+            log.insertBefore(entry, log.firstChild);
+        }
+
+        // Initialize on load
+        initCache();
+    </script>
+</body>
+
+</html>
