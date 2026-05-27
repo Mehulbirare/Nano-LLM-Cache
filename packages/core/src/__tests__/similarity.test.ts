@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calculateSimilarity, normalizeVector } from '../src/similarity';
+import { calculateSimilarity, normalizeVector } from '../similarity';
 
 describe('Similarity Functions', () => {
     describe('calculateSimilarity', () => {

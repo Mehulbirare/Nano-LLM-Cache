@@ -42,6 +42,13 @@ export interface CacheEntry {
     response: string;
     timestamp: number;
     metadata?: Record<string, any>;
+    /**
+     * SHA-256 hash of the conversation context (model + system prompt + prior turns).
+     * Present when the entry was saved via the chat wrapper. When set, it acts as an
+     * exact-match gate so that semantically similar user messages with different
+     * system prompts / prior turns do not collide.
+     */
+    contextHash?: string;
 }
 
 /**

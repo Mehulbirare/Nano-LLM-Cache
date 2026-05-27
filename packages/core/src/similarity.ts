@@ -13,7 +13,6 @@ export function calculateSimilarity(vecA: number[], vecB: number[]): number {
         return 0;
     }
 
-    // Calculate dot product
     let dotProduct = 0;
     let magnitudeA = 0;
     let magnitudeB = 0;
@@ -24,19 +23,15 @@ export function calculateSimilarity(vecA: number[], vecB: number[]): number {
         magnitudeB += vecB[i] * vecB[i];
     }
 
-    // Calculate magnitudes
     magnitudeA = Math.sqrt(magnitudeA);
     magnitudeB = Math.sqrt(magnitudeB);
 
-    // Avoid division by zero
     if (magnitudeA === 0 || magnitudeB === 0) {
         return 0;
     }
 
-    // Calculate cosine similarity
     const similarity = dotProduct / (magnitudeA * magnitudeB);
 
-    // Clamp to [0, 1] range (handle floating point errors)
     return Math.max(0, Math.min(1, similarity));
 }
 
@@ -62,4 +57,45 @@ export function normalizeVector(vec: number[]): number[] {
  */
 export function toArray(arrayLike: ArrayLike<number>): number[] {
     return Array.from(arrayLike);
+}
+
+/**
+ * Fast cosine similarity for pre-normalized Float32Array vectors.
+ * Embeddings from transformers.js are L2-normalized, so cosine = dot product.
+ * Skipping magnitude computation makes this ~3x faster than the generic path,
+ * and Float32Array math is faster than plain number arrays.
+ */
+export function dotF32(a: Float32Array, b: Float32Array): number {
+    if (a.length !== b.length) {
+        throw new Error('Vectors must have the same length');
+    }
+    let sum = 0;
+    const len = a.length;
+    for (let i = 0; i < len; i++) {
+        sum += a[i] * b[i];
+    }
+    return Math.max(0, Math.min(1, sum));
+}
+
+/**
+ * SHA-256 hash of a string, returned as hex.
+ * Uses Web Crypto, available in browsers and Node 18+.
+ */
+export async function sha256Hex(input: string): Promise<string> {
+    const cryptoObj = getCrypto();
+    const data = new TextEncoder().encode(input);
+    const hashBuffer = await cryptoObj.subtle.digest('SHA-256', data);
+    const bytes = new Uint8Array(hashBuffer);
+    let hex = '';
+    for (let i = 0; i < bytes.length; i++) {
+        hex += bytes[i].toString(16).padStart(2, '0');
+    }
+    return hex;
+}
+
+function getCrypto(): Crypto {
+    if (typeof globalThis !== 'undefined' && globalThis.crypto?.subtle) {
+        return globalThis.crypto;
+    }
+    throw new Error('Web Crypto API not available. Requires Node 18+ or a modern browser.');
 }

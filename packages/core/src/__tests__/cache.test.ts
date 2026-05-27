@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { NanoCache } from '../src/cache';
+import { NanoCache } from '../cache';
 
 describe('NanoCache', () => {
     let cache: NanoCache;

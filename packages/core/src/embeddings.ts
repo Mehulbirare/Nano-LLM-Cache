@@ -2,9 +2,10 @@ import { pipeline, env } from '@xenova/transformers';
 import type { Pipeline } from '@xenova/transformers';
 import { toArray } from './similarity';
 
-// Configure transformers to use CDN caching
+// Configure transformers caching — browser cache only when actually in a browser
+const isBrowser = typeof document !== 'undefined';
 env.allowLocalModels = false;
-env.useBrowserCache = true;
+env.useBrowserCache = isBrowser;
 
 /**
  * Embedding generator using Xenova Transformers

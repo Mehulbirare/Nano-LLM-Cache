@@ -1,13 +1,21 @@
 import { CacheStorage } from './storage';
 import { EmbeddingGenerator } from './embeddings';
-import { calculateSimilarity } from './similarity';
+import { dotF32, sha256Hex } from './similarity';
 import type {
     NanoCacheConfig,
     CacheEntry,
     CacheQueryResult,
+    ChatMessage,
     ChatCompletionRequest,
     ChatCompletionResponse
 } from './types';
+
+const EXPIRY_THROTTLE_MS = 60_000;
+
+interface IndexedEntry {
+    entry: CacheEntry;
+    embF32: Float32Array;
+}
 
 /**
  * NanoCache - Semantic cache for LLM API calls
@@ -16,6 +24,15 @@ export class NanoCache {
     private storage: CacheStorage;
     private embeddings: EmbeddingGenerator;
     private config: Required<NanoCacheConfig>;
+
+    private index: Map<string, IndexedEntry> = new Map();
+    private indexLoaded = false;
+    private indexLoadPromise: Promise<void> | null = null;
+
+    private lastExpiryRunAt = 0;
+
+    private inflightQueries: Map<string, Promise<CacheQueryResult>> = new Map();
+    private inflightLLMCalls: Map<string, Promise<ChatCompletionResponse>> = new Map();
 
     constructor(config: NanoCacheConfig = {}) {
         this.config = {
@@ -31,49 +48,56 @@ export class NanoCache {
     }
 
     /**
-     * Query the cache for a similar prompt
+     * Query the cache for a semantically similar prompt.
+     * When contextHash is provided, only entries with the same contextHash are eligible —
+     * this prevents wrong hits across conversations with different system prompts / prior turns.
      */
-    async query(prompt: string): Promise<CacheQueryResult> {
+    async query(prompt: string, contextHash?: string): Promise<CacheQueryResult> {
+        const dedupKey = `${contextHash ?? ''}::${prompt}`;
+        const existing = this.inflightQueries.get(dedupKey);
+        if (existing) return existing;
+
+        const p = this._doQuery(prompt, contextHash);
+        this.inflightQueries.set(dedupKey, p);
         try {
-            // Clean up expired entries if maxAge is set
-            if (this.config.maxAge > 0) {
-                await this.storage.removeExpired(this.config.maxAge);
-            }
+            return await p;
+        } finally {
+            this.inflightQueries.delete(dedupKey);
+        }
+    }
 
-            // Generate embedding for the query
+    private async _doQuery(prompt: string, contextHash?: string): Promise<CacheQueryResult> {
+        try {
+            await this.loadIndex();
+            await this.maybeRunExpiry();
+
             const queryEmbedding = await this.embeddings.generate(prompt);
+            const queryF32 = Float32Array.from(queryEmbedding);
 
-            // Get all cached entries
-            const entries = await this.storage.getAll();
-
-            if (entries.length === 0) {
-                if (this.config.debug) {
-                    console.log('[NanoCache] Cache is empty');
-                }
+            if (this.index.size === 0) {
+                if (this.config.debug) console.log('[NanoCache] Cache is empty');
                 return { hit: false };
             }
 
-            // Find the most similar entry
             let bestMatch: CacheEntry | null = null;
             let bestSimilarity = 0;
 
-            for (const entry of entries) {
-                const similarity = calculateSimilarity(queryEmbedding, entry.embedding);
+            for (const { entry, embF32 } of this.index.values()) {
+                if (contextHash !== undefined && entry.contextHash !== contextHash) continue;
 
+                const similarity = dotF32(queryF32, embF32);
                 if (similarity > bestSimilarity) {
                     bestSimilarity = similarity;
                     bestMatch = entry;
                 }
             }
 
-            // Check if similarity exceeds threshold
             if (bestMatch && bestSimilarity >= this.config.similarityThreshold) {
                 if (this.config.debug) {
                     console.log(`[NanoCache] Cache HIT! Similarity: ${bestSimilarity.toFixed(4)}`);
                     console.log(`[NanoCache] Original: "${bestMatch.prompt}"`);
                     console.log(`[NanoCache] Query: "${prompt}"`);
                 }
-
                 return {
                     hit: true,
                     response: bestMatch.response,
@@ -85,7 +109,6 @@ export class NanoCache {
             if (this.config.debug) {
                 console.log(`[NanoCache] Cache MISS. Best similarity: ${bestSimilarity.toFixed(4)}`);
             }
-
             return { hit: false, similarity: bestSimilarity };
         } catch (error) {
             console.error('[NanoCache] Query error:', error);
@@ -94,27 +117,31 @@ export class NanoCache {
     }
 
     /**
-     * Save a prompt-response pair to the cache
+     * Save a prompt-response pair to the cache.
      */
-    async save(prompt: string, response: string, metadata?: Record<string, any>): Promise<void> {
+    async save(
+        prompt: string,
+        response: string,
+        metadata?: Record<string, any>,
+        contextHash?: string
+    ): Promise<void> {
         try {
-            // Generate embedding
+            await this.loadIndex();
+
             const embedding = await this.embeddings.generate(prompt);
 
-            // Create cache entry
             const entry: CacheEntry = {
                 prompt,
                 embedding,
                 response,
                 timestamp: Date.now(),
-                metadata
+                metadata,
+                contextHash
             };
 
-            // Generate ID from prompt hash
-            const id = this.hashPrompt(prompt);
-
-            // Save to storage
+            const id = await sha256Hex(`${contextHash ?? ''}::${prompt}`);
             await this.storage.save(id, entry);
+            this.index.set(id, { entry, embF32: Float32Array.from(embedding) });
 
             if (this.config.debug) {
                 console.log(`[NanoCache] Saved entry for prompt: "${prompt}"`);
@@ -125,34 +152,24 @@ export class NanoCache {
         }
     }
 
-    /**
-     * Clear all cached entries
-     */
     async clear(): Promise<void> {
         await this.storage.clear();
+        this.index.clear();
+        this.indexLoaded = true;
 
         if (this.config.debug) {
             console.log('[NanoCache] Cache cleared');
         }
     }
 
-    /**
-     * Get cache statistics
-     */
     async getStats() {
         return await this.storage.getStats();
     }
 
-    /**
-     * Check if embedding model is loaded
-     */
     isModelLoaded(): boolean {
         return this.embeddings.isLoaded();
     }
 
-    /**
-     * Preload the embedding model
-     */
     async preloadModel(): Promise<void> {
         await this.embeddings.generate('warmup');
 
@@ -161,29 +178,61 @@ export class NanoCache {
         }
     }
 
-    /**
-     * Unload the embedding model to free memory
-     */
     async unloadModel(): Promise<void> {
         await this.embeddings.unload();
     }
 
-    /**
-     * Simple hash function for prompt
-     */
-    private hashPrompt(prompt: string): string {
-        let hash = 0;
-        for (let i = 0; i < prompt.length; i++) {
-            const char = prompt.charCodeAt(i);
-            hash = ((hash << 5) - hash) + char;
-            hash = hash & hash;
+    private async loadIndex(): Promise<void> {
+        if (this.indexLoaded) return;
+        if (this.indexLoadPromise) {
+            await this.indexLoadPromise;
+            return;
         }
-        return Math.abs(hash).toString(36);
+
+        this.indexLoadPromise = (async () => {
+            const all = await this.storage.getAllWithIds();
+            for (const { id, entry } of all) {
+                this.index.set(id, { entry, embF32: Float32Array.from(entry.embedding) });
+            }
+            this.indexLoaded = true;
+            if (this.config.debug) {
+                console.log(`[NanoCache] Index hydrated with ${this.index.size} entries`);
+            }
+        })();
+
+        try {
+            await this.indexLoadPromise;
+        } finally {
+            this.indexLoadPromise = null;
+        }
+    }
+
+    private async maybeRunExpiry(): Promise<void> {
+        if (this.config.maxAge <= 0) return;
+        const now = Date.now();
+        if (now - this.lastExpiryRunAt < EXPIRY_THROTTLE_MS) return;
+        this.lastExpiryRunAt = now;
+
+        const toDelete: string[] = [];
+        for (const [id, { entry }] of this.index.entries()) {
+            if (now - entry.timestamp > this.config.maxAge) {
+                toDelete.push(id);
+            }
+        }
+        for (const id of toDelete) {
+            await this.storage.delete(id);
+            this.index.delete(id);
+        }
+        if (this.config.debug && toDelete.length > 0) {
+            console.log(`[NanoCache] Expired ${toDelete.length} entries`);
+        }
     }
 
     /**
-     * Create a wrapper for OpenAI-compatible chat completion
-     * This allows drop-in replacement of openai.chat.completions.create
+     * Create a wrapper for OpenAI-compatible chat completion.
+     * Hashes the full conversation context (model + system + prior turns) so two
+     * requests with the same final user message but different context don't collide.
+     * In-flight LLM calls for the same key are deduplicated.
      */
     createChatWrapper<T extends (req: ChatCompletionRequest) => Promise<ChatCompletionResponse>>(
         originalFn: T
@@ -191,22 +240,29 @@ export class NanoCache {
         const self = this;
 
         return (async function wrappedCreate(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
-            // Extract the user's prompt from messages
-            const userMessage = request.messages
-                .filter(m => m.role === 'user')
-                .map(m => m.content)
-                .join('\n');
-
-            if (!userMessage) {
-                // No user message, just call original
+            const messages = request.messages;
+            if (!messages || messages.length === 0) {
                 return await originalFn(request);
             }
 
-            // Check cache
-            const cacheResult = await self.query(userMessage);
+            let lastUserIdx = -1;
+            for (let i = messages.length - 1; i >= 0; i--) {
+                if (messages[i].role === 'user') {
+                    lastUserIdx = i;
+                    break;
+                }
+            }
+            if (lastUserIdx === -1 || !messages[lastUserIdx].content) {
+                return await originalFn(request);
+            }
+
+            const lastUserContent = messages[lastUserIdx].content;
+            const contextMessages = messages.slice(0, lastUserIdx);
+            const contextHash = await sha256Hex(serializeContext(request.model, contextMessages));
+
+            const cacheResult = await self.query(lastUserContent, contextHash);
 
             if (cacheResult.hit && cacheResult.response) {
-                // Return cached response in OpenAI format
                 return {
                     id: `nano-cache-${Date.now()}`,
                     object: 'chat.completion',
@@ -225,19 +281,34 @@ export class NanoCache {
                 };
             }
 
-            // Cache miss - call original function
-            const response = await originalFn(request);
-
-            // Save to cache
-            const assistantMessage = response.choices[0]?.message?.content;
-            if (assistantMessage) {
-                await self.save(userMessage, assistantMessage, {
-                    model: request.model,
-                    timestamp: response.created
-                });
+            const inflightKey = `${contextHash}::${lastUserContent}`;
+            let pending = self.inflightLLMCalls.get(inflightKey);
+            if (!pending) {
+                pending = (async () => {
+                    try {
+                        const response = await originalFn(request);
+                        const assistantMessage = response.choices?.[0]?.message?.content;
+                        if (assistantMessage) {
+                            await self.save(
+                                lastUserContent,
+                                assistantMessage,
+                                { model: request.model, timestamp: response.created },
+                                contextHash
+                            );
+                        }
+                        return response;
+                    } finally {
+                        self.inflightLLMCalls.delete(inflightKey);
+                    }
+                })();
+                self.inflightLLMCalls.set(inflightKey, pending);
             }
-
-            return response;
+            return await pending;
         }) as T;
     }
+}
+
+function serializeContext(model: string, messages: ChatMessage[]): string {
+    const parts = messages.map(m => `${m.role} ${m.content}`);
+    return `model=${model}\n${parts.join('\n\n')}`;
 }
