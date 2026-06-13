@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-06-13
+
+### Added
+- Node.js filesystem storage backend (with in-memory fallback) so the cache no longer requires IndexedDB
+- `maxEntries` config option with LRU eviction
+- `delete(prompt, contextHash?)` for single-entry invalidation
+- `ChatWrapperOptions.shouldCache` predicate to opt requests out of caching
+- Multimodal/tool message support: array and `null` message content, and `tool`/`function` roles
+
+### Changed
+- `getStats()` now reads from the in-memory index instead of re-reading storage
+- Wrapper response caching is best-effort — a storage failure no longer fails the completion
+- `serializeContext` uses an unambiguous JSON encoding to avoid context-hash collisions
+
+### Fixed
+- TTL is now enforced on read, so expired entries never produce a hit before the sweep
+- Streaming (`stream: true`) and multi-completion (`n > 1`) requests are passed through uncached
+- Embedding dimension mismatches (e.g. switching models under one prefix) are skipped instead of throwing
+- `clear()` can no longer be clobbered by an in-flight index hydration
+- Corrected `exports` condition ordering in package.json so `types` resolve for consumers
+
 ## [1.0.0] - 2026-02-15
 
 ### Added

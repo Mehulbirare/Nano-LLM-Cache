@@ -12,16 +12,16 @@
     "publishConfig": {
         "access": "public"
     },
-    "version": "1.0.2",
+    "version": "2.1.0",
     "description": "A semantic cache for LLM API calls using local embeddings and vector similarity",
     "main": "./dist/index.js",
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
-            "require": "./dist/index.js",
+            "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs",
-            "types": "./dist/index.d.ts"
+            "require": "./dist/index.js"
         }
     },
     "files": [

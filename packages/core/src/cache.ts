@@ -18,6 +18,18 @@ interface IndexedEntry {
 }
 
 /**
+ * Options for the chat-completion wrapper.
+ */
+export interface ChatWrapperOptions {
+    /**
+     * Return false to skip the cache (both read and write) for a given request.
+     * Useful for high-temperature / non-deterministic requests you don't want
+     * to memoize.
+     */
+    shouldCache?: (request: ChatCompletionRequest) => boolean;
+}
+
+/**
  * NanoCache - Semantic cache for LLM API calls
  */
 export class NanoCache {
@@ -28,6 +40,8 @@ export class NanoCache {
     private index: Map<string, IndexedEntry> = new Map();
     private indexLoaded = false;
     private indexLoadPromise: Promise<void> | null = null;
+    // Bumped on clear() so an in-flight hydration discards stale results.
+    private storeGeneration = 0;
 
     private lastExpiryRunAt = 0;
 
@@ -38,6 +52,7 @@ export class NanoCache {
         this.config = {
             similarityThreshold: config.similarityThreshold ?? 0.95,
             maxAge: config.maxAge ?? 0,
+            maxEntries: config.maxEntries ?? 0,
             modelName: config.modelName ?? 'Xenova/all-MiniLM-L6-v2',
             debug: config.debug ?? false,
             storagePrefix: config.storagePrefix ?? 'nano-llm-cache'
@@ -79,20 +94,29 @@ export class NanoCache {
                 return { hit: false };
             }
 
+            const now = Date.now();
             let bestMatch: CacheEntry | null = null;
+            let bestId: string | null = null;
             let bestSimilarity = 0;
 
-            for (const { entry, embF32 } of this.index.values()) {
+            for (const [id, { entry, embF32 }] of this.index.entries()) {
                 if (contextHash !== undefined && entry.contextHash !== contextHash) continue;
+                // Enforce TTL on read so expired-but-not-yet-swept entries never hit.
+                if (this.config.maxAge > 0 && now - entry.timestamp > this.config.maxAge) continue;
+                // Skip entries whose embedding dimension differs (e.g. saved with a
+                // different model under the same prefix) instead of throwing.
+                if (embF32.length !== queryF32.length) continue;
 
                 const similarity = dotF32(queryF32, embF32);
                 if (similarity > bestSimilarity) {
                     bestSimilarity = similarity;
                     bestMatch = entry;
+                    bestId = id;
                 }
             }
 
-            if (bestMatch && bestSimilarity >= this.config.similarityThreshold) {
+            if (bestMatch && bestId && bestSimilarity >= this.config.similarityThreshold) {
+                this.touch(bestId);
                 if (this.config.debug) {
                     console.log(`[NanoCache] Cache HIT! Similarity: ${bestSimilarity.toFixed(4)}`);
                     console.log(`[NanoCache] Original: "${bestMatch.prompt}"`);
@@ -141,7 +165,12 @@ export class NanoCache {
 
             const id = await sha256Hex(`${contextHash ?? ''}::${prompt}`);
             await this.storage.save(id, entry);
+
+            // Re-insert so an overwritten entry moves to the most-recently-used end.
+            this.index.delete(id);
             this.index.set(id, { entry, embF32: Float32Array.from(embedding) });
+
+            await this.evictIfNeeded();
 
             if (this.config.debug) {
                 console.log(`[NanoCache] Saved entry for prompt: "${prompt}"`);
@@ -152,7 +181,22 @@ export class NanoCache {
         }
     }
 
+    /**
+     * Delete a single cached entry. Returns true if an entry was present.
+     */
+    async delete(prompt: string, contextHash?: string): Promise<boolean> {
+        await this.loadIndex();
+        const id = await sha256Hex(`${contextHash ?? ''}::${prompt}`);
+        const existed = this.index.delete(id);
+        await this.storage.delete(id);
+        if (this.config.debug && existed) {
+            console.log(`[NanoCache] Deleted entry for prompt: "${prompt}"`);
+        }
+        return existed;
+    }
+
     async clear(): Promise<void> {
+        this.storeGeneration++;
         await this.storage.clear();
         this.index.clear();
         this.indexLoaded = true;
@@ -163,7 +207,17 @@ export class NanoCache {
     }
 
     async getStats() {
-        return await this.storage.getStats();
+        await this.loadIndex();
+        if (this.index.size === 0) {
+            return { totalEntries: 0, oldestEntry: null as number | null, newestEntry: null as number | null };
+        }
+        let oldest = Infinity;
+        let newest = -Infinity;
+        for (const { entry } of this.index.values()) {
+            if (entry.timestamp < oldest) oldest = entry.timestamp;
+            if (entry.timestamp > newest) newest = entry.timestamp;
+        }
+        return { totalEntries: this.index.size, oldestEntry: oldest, newestEntry: newest };
     }
 
     isModelLoaded(): boolean {
@@ -182,6 +236,30 @@ export class NanoCache {
         await this.embeddings.unload();
     }
 
+    /** Move an entry to the most-recently-used end of the LRU order. */
+    private touch(id: string): void {
+        if (this.config.maxEntries <= 0) return;
+        const e = this.index.get(id);
+        if (e) {
+            this.index.delete(id);
+            this.index.set(id, e);
+        }
+    }
+
+    /** Evict least-recently-used entries until within maxEntries. */
+    private async evictIfNeeded(): Promise<void> {
+        if (this.config.maxEntries <= 0) return;
+        while (this.index.size > this.config.maxEntries) {
+            const oldestId = this.index.keys().next().value as string | undefined;
+            if (!oldestId) break;
+            this.index.delete(oldestId);
+            await this.storage.delete(oldestId);
+            if (this.config.debug) {
+                console.log(`[NanoCache] Evicted LRU entry ${oldestId}`);
+            }
+        }
+    }
+
     private async loadIndex(): Promise<void> {
         if (this.indexLoaded) return;
         if (this.indexLoadPromise) {
@@ -190,7 +268,10 @@ export class NanoCache {
         }
 
         this.indexLoadPromise = (async () => {
+            const gen = this.storeGeneration;
             const all = await this.storage.getAllWithIds();
+            // A clear() that happened while we were fetching wins — drop stale rows.
+            if (gen !== this.storeGeneration) return;
             for (const { id, entry } of all) {
                 this.index.set(id, { entry, embF32: Float32Array.from(entry.embedding) });
             }
@@ -233,15 +314,28 @@ export class NanoCache {
      * Hashes the full conversation context (model + system + prior turns) so two
      * requests with the same final user message but different context don't collide.
      * In-flight LLM calls for the same key are deduplicated.
+     *
+     * Streaming requests, requests asking for multiple completions (n > 1), and
+     * messages without extractable text are passed through uncached.
      */
     createChatWrapper<T extends (req: ChatCompletionRequest) => Promise<ChatCompletionResponse>>(
-        originalFn: T
+        originalFn: T,
+        options: ChatWrapperOptions = {}
     ): T {
         const self = this;
 
         return (async function wrappedCreate(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
             const messages = request.messages;
             if (!messages || messages.length === 0) {
+                return await originalFn(request);
+            }
+
+            // Bypass caching for cases the cache can't faithfully represent.
+            const stream = (request as Record<string, any>).stream === true;
+            const n = (request as Record<string, any>).n;
+            const wantsMultiple = typeof n === 'number' && n > 1;
+            const optedOut = options.shouldCache ? !options.shouldCache(request) : false;
+            if (stream || wantsMultiple || optedOut) {
                 return await originalFn(request);
             }
 
@@ -252,11 +346,15 @@ export class NanoCache {
                     break;
                 }
             }
-            if (lastUserIdx === -1 || !messages[lastUserIdx].content) {
+            if (lastUserIdx === -1) {
                 return await originalFn(request);
             }
 
-            const lastUserContent = messages[lastUserIdx].content;
+            const lastUserContent = extractText(messages[lastUserIdx].content);
+            if (lastUserContent === null) {
+                return await originalFn(request);
+            }
+
             const contextMessages = messages.slice(0, lastUserIdx);
             const contextHash = await sha256Hex(serializeContext(request.model, contextMessages));
 
@@ -287,14 +385,22 @@ export class NanoCache {
                 pending = (async () => {
                     try {
                         const response = await originalFn(request);
-                        const assistantMessage = response.choices?.[0]?.message?.content;
+                        const assistantMessage = extractText(response.choices?.[0]?.message?.content);
                         if (assistantMessage) {
-                            await self.save(
-                                lastUserContent,
-                                assistantMessage,
-                                { model: request.model, timestamp: response.created },
-                                contextHash
-                            );
+                            // Caching is a best-effort side effect — never let a
+                            // storage failure surface as a failed completion.
+                            try {
+                                await self.save(
+                                    lastUserContent,
+                                    assistantMessage,
+                                    { model: request.model, apiCreated: response.created },
+                                    contextHash
+                                );
+                            } catch (err) {
+                                if (self.config.debug) {
+                                    console.error('[NanoCache] Failed to cache response:', err);
+                                }
+                            }
                         }
                         return response;
                     } finally {
@@ -308,7 +414,30 @@ export class NanoCache {
     }
 }
 
+/**
+ * Extract plain text from a message content value (string, multimodal parts,
+ * or null). Returns null when there is no usable text.
+ */
+function extractText(content: ChatMessage['content'] | undefined): string | null {
+    if (typeof content === 'string') {
+        return content.length > 0 ? content : null;
+    }
+    if (Array.isArray(content)) {
+        const text = content
+            .filter(p => p && p.type === 'text' && typeof p.text === 'string')
+            .map(p => p.text as string)
+            .join('\n')
+            .trim();
+        return text.length > 0 ? text : null;
+    }
+    return null;
+}
+
+/**
+ * Unambiguous serialization of the conversation context. Using a JSON array of
+ * [role, content] pairs avoids collisions that a flat string join could produce
+ * when message content itself contains delimiters or role-like text.
+ */
 function serializeContext(model: string, messages: ChatMessage[]): string {
-    const parts = messages.map(m => `${m.role} ${m.content}`);
-    return `model=${model}\n${parts.join('\n\n')}`;
+    return JSON.stringify([model, messages.map(m => [m.role, m.content])]);
 }

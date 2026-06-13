@@ -1,6 +1,15 @@
 import { pipeline, env } from '@xenova/transformers';
-import type { Pipeline } from '@xenova/transformers';
 import { toArray } from './similarity';
+
+/**
+ * Minimal structural type for the feature-extraction pipeline we use.
+ * The concrete pipeline classes in @xenova/transformers don't share a single
+ * assignable interface, so we describe just the call signature we rely on.
+ */
+type FeaturePipeline = (
+    text: string,
+    options?: { pooling?: 'mean' | 'cls' | 'none'; normalize?: boolean }
+) => Promise<{ data?: ArrayLike<number> } & ArrayLike<number>>;
 
 // Configure transformers caching — browser cache only when actually in a browser
 const isBrowser = typeof document !== 'undefined';
@@ -11,7 +20,7 @@ env.useBrowserCache = isBrowser;
  * Embedding generator using Xenova Transformers
  */
 export class EmbeddingGenerator {
-    private model: Pipeline | null = null;
+    private model: FeaturePipeline | null = null;
     private modelName: string;
     private loading: Promise<void> | null = null;
     private debug: boolean;
@@ -42,7 +51,7 @@ export class EmbeddingGenerator {
                     console.log(`[NanoCache] Loading embedding model: ${this.modelName}`);
                 }
 
-                this.model = await pipeline('feature-extraction', this.modelName);
+                this.model = (await pipeline('feature-extraction', this.modelName)) as unknown as FeaturePipeline;
 
                 if (this.debug) {
                     console.log('[NanoCache] Embedding model loaded successfully');

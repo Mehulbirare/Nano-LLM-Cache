@@ -9,10 +9,18 @@ export interface NanoCacheConfig {
     similarityThreshold?: number;
 
     /**
-     * Maximum age of cached entries in milliseconds
-     * @default undefined (no expiration)
+     * Maximum age of cached entries in milliseconds.
+     * Use 0 (the default) to disable expiration.
+     * @default 0
      */
     maxAge?: number;
+
+    /**
+     * Maximum number of entries to keep. When exceeded, the least-recently-used
+     * entries are evicted. Use 0 (the default) for an unbounded cache.
+     * @default 0
+     */
+    maxEntries?: number;
 
     /**
      * Model name for embeddings
@@ -62,11 +70,29 @@ export interface CacheQueryResult {
 }
 
 /**
- * OpenAI-compatible message structure
+ * OpenAI-compatible role.
+ */
+export type ChatRole = 'system' | 'user' | 'assistant' | 'tool' | 'function';
+
+/**
+ * A single content part for multimodal messages (text, image, etc.).
+ */
+export interface ChatContentPart {
+    type: string;
+    text?: string;
+    [key: string]: any;
+}
+
+/**
+ * OpenAI-compatible message structure.
+ * `content` may be a plain string, an array of content parts (multimodal),
+ * or null (e.g. assistant messages that only contain tool calls).
  */
 export interface ChatMessage {
-    role: 'system' | 'user' | 'assistant';
-    content: string;
+    role: ChatRole;
+    content: string | ChatContentPart[] | null;
+    name?: string;
+    [key: string]: any;
 }
 
 /**

@@ -26,7 +26,7 @@ Nano-LLM-Cache uses **vector embeddings** to understand meaning:
 - 🧠 **Semantic Understanding**: Matches prompts by meaning, not exact text
 - 🔒 **Privacy-First**: Embeddings run locally - your data never leaves the device
 - ⚡ **Fast & Lightweight**: Uses quantized models (~20MB, cached forever)
-- 💾 **Persistent Storage**: IndexedDB for cross-session caching
+- 💾 **Persistent Storage**: IndexedDB in the browser, filesystem in Node (in-memory fallback otherwise)
 - ⏰ **TTL Support**: Configurable time-to-live for cache entries
 - 🔌 **Drop-in Replacement**: Works as an OpenAI SDK wrapper
 - 📊 **Cache Analytics**: Built-in statistics and monitoring
@@ -117,10 +117,11 @@ new NanoCache(config?: NanoCacheConfig)
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `similarityThreshold` | `number` | `0.95` | Minimum similarity (0-1) for cache hit |
-| `maxAge` | `number` | `undefined` | Max age in ms before entries expire |
+| `maxAge` | `number` | `0` | Max age in ms before entries expire (`0` = never) |
+| `maxEntries` | `number` | `0` | Max entries to keep; LRU eviction above this (`0` = unbounded) |
 | `modelName` | `string` | `'Xenova/all-MiniLM-L6-v2'` | Embedding model to use |
 | `debug` | `boolean` | `false` | Enable debug logging |
-| `storagePrefix` | `string` | `'nano-llm-cache'` | IndexedDB key prefix |
+| `storagePrefix` | `string` | `'nano-llm-cache'` | Storage key prefix |
 
 #### Methods
 
@@ -158,6 +159,14 @@ Clear all cache entries.
 await cache.clear();
 ```
 
+##### `delete(prompt: string, contextHash?: string): Promise<boolean>`
+
+Delete a single cached entry. Returns `true` if an entry was present.
+
+```typescript
+await cache.delete('What is TypeScript?');
+```
+
 ##### `getStats(): Promise<CacheStats>`
 
 Get cache statistics.
@@ -185,7 +194,7 @@ Unload the model to free memory.
 await cache.unloadModel();
 ```
 
-##### `createChatWrapper<T>(originalFn: T): T`
+##### `createChatWrapper<T>(originalFn: T, options?: ChatWrapperOptions): T`
 
 Create an OpenAI-compatible wrapper function.
 
@@ -193,6 +202,17 @@ Create an OpenAI-compatible wrapper function.
 const cachedCreate = cache.createChatWrapper(
   openai.chat.completions.create.bind(openai.chat.completions)
 );
+```
+
+The wrapper transparently passes the request through (uncached) when it can't
+faithfully represent the result: `stream: true`, `n > 1`, or a last user message
+with no extractable text. You can also opt specific requests out:
+
+```typescript
+const cachedCreate = cache.createChatWrapper(originalCreate, {
+  // Don't cache high-temperature / non-deterministic requests
+  shouldCache: (req) => (req.temperature ?? 0) <= 0.2
+});
 ```
 
 ## 🎨 Examples
